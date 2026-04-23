@@ -11,9 +11,8 @@ import omnigibson as og
 def save_results_to_csv(results, log_dir, global_timestamp, model_type, task, perturbation):
     file_uuid = str(uuid.uuid1())[:6]
     # Handle cleaning up model_type string for filename if it's a path
-    if model_type not in ("pi0", "pi0_FAST", "GR00T"):
-        script_filename = model_type.split("/")[-1]
-        model_type_str = ".".join(script_filename.split(".")[:-1])
+    if "/" in model_type:
+        model_type_str = os.path.splitext(os.path.basename(model_type))[0]
     else:
         model_type_str = model_type
 

@@ -85,6 +85,59 @@ OMNIGIBSON_HEADLESS=1 python /app/examples/01_pi0_eval.py
 
 This should produce a rollout video and a numpy report file with the evaluation results inside the logs folder.
 
+# Example Workflow: GR00T N1.6 DROID evaluation
+
+`REALM` now also supports NVIDIA Isaac GR00T's DROID checkpoint through the local `Isaac-GR00T` checkout in this workspace.
+
+1. Download the checkpoint locally:
+```
+bash Isaac-GR00T/scripts/download_gr00t_n1_6_droid.sh
+```
+
+This downloads `nvidia/GR00T-N1.6-DROID` into `Isaac-GR00T/checkpoints/GR00T-N1.6-DROID` and pulls about 6.6GB of weights.
+
+2. Start the GR00T policy server from the `Isaac-GR00T` side:
+```
+bash Isaac-GR00T/scripts/run_gr00t_n1_6_droid_server.sh
+```
+
+This launches:
+```
+uv run python gr00t/eval/run_gr00t_server.py \
+    --embodiment-tag OXE_DROID \
+    --use_sim_policy_wrapper \
+    --model-path Isaac-GR00T/checkpoints/GR00T-N1.6-DROID \
+    --port 5555
+```
+
+3. From the REALM project root, open the containerized environment:
+```
+source ./scripts/run_docker.sh
+```
+
+4. Inside the container run a quick evaluation:
+```
+# With real-time GUI:
+python /app/examples/03_gr00t_n1_6_droid_eval.py
+
+# In headless mode:
+OMNIGIBSON_HEADLESS=1 python /app/examples/03_gr00t_n1_6_droid_eval.py
+```
+
+5. For the full benchmark entrypoint, use the standard dynamic eval script:
+```
+OMNIGIBSON_HEADLESS=1 python /app/examples/02_eval_dynamic_scenes.py \
+    --perturbation_id 0 \
+    --task_id 1 \
+    --repeats 5 \
+    --max_steps 500 \
+    --port 5555 \
+    --experiment_name gr00t_n1_6_droid_smoke \
+    --model GR00T_N1.6_DROID
+```
+
+The supported GR00T model aliases in REALM include `GR00T`, `GR00T_N1.6_DROID`, and other `gr00t*` names.
+
 # End-to-end VLA benchmarking in REALM
 
 Follow steps 1 and 2 as above. Then run:

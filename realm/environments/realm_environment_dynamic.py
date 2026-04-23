@@ -152,6 +152,12 @@ class RealmEnvironmentDynamic(RealmEnvironmentBase):
 
         scene_config_path = f"{self.config_path}/tasks/{self.task}.yaml"
         comprehensive_cfg = yaml.load(open(scene_config_path, "r"), Loader=yaml.FullLoader)
+        self.v_sc_target_jitter_range_xy = np.array(
+            comprehensive_cfg.get("v_sc_target_jitter_range_xy", [0.05, 0.05]),
+            dtype=float,
+        )
+        self.v_sc_target_jitter_range_xy = np.maximum(self.v_sc_target_jitter_range_xy, 0.0)
+        assert self.v_sc_target_jitter_range_xy.shape == (2,)
         cfg.update(comprehensive_cfg)
         # ---------------------------------------- scene config ----------------------------------------
         for k in ["external_sensors", "robots"]:
@@ -343,113 +349,119 @@ class RealmEnvironmentDynamic(RealmEnvironmentBase):
     def default(self):
         return
 
-    def v_light(self, intensity=None):
-        if intensity is None:
-            intensity =  np.random.uniform(20000, 750000)
+    def v_light(self, degree: int = 2, intensity=None):
+        assert degree in [1, 2, 3]
 
-        def find_lights_recursive(obj): # TODO: move the search to new scene instantiation, pointless to call it everytime unless we are swapping scene
+        if degree == 1:
+            # === 原始行为（完全不变） ===
+            low, high = 20000, 750000
+            col_std = 15
+
+        elif degree == 2:
+            # === 中等增强：更亮 / 更暗都可能，但仍非常合理 ===
+            low, high = 15000, 1_050_000
+            col_std = 20
+
+        else:  # degree == 3
+            # === 强增强：明显不同光照条件，但避免“照炸/全黑” ===
+            low, high = 10000, 1_350_000
+            col_std = 24
+
+        if intensity is None:
+            intensity = np.random.uniform(low, high)
+
+        def find_lights_recursive(obj):
             lights = []
             if "light" in obj.name:
                 lights.append(obj)
-
             if hasattr(obj, "_links"):
                 for link in obj._links.values():
                     lights.extend(find_lights_recursive(link))
-
             return lights
-
-        # def find_light_prim(light_object):
-        #     object_prim = light_object.root_prim
-        #     for child in object_prim.GetChildren():
-        #         if child.GetTypeName() == "Xform":
-        #             for grand_child in child.GetChildren():
-        #                 if grand_child.IsA(lazy.pxr.UsdLux.Light):
-        #                     return grand_child
-        #     return None
 
         all_lights = []
         for obj in self.omnigibson_env.scene.objects:
             all_lights.extend(find_lights_recursive(obj))
 
-        col_mean = np.array([255, 214, 170])
-        col_std = 15
-        world_path = "/World/scene_0" # TODO: is this always the case? what about vectorized envs
+        col_mean = np.array([255, 214, 170], dtype=float)
+        world_path = "/World/scene_0"
+
         for light in all_lights:
-            light_prim_path = world_path + light._relative_prim_path + "/light_0" # TODO: ^^^
+            light_prim_path = world_path + light._relative_prim_path + "/light_0"
             light_prim = lazy.omni.isaac.core.utils.prims.get_prim_at_path(light_prim_path)
-            if light_prim is None or not light_prim.IsValid(): # the recursive search also takes links that do not contain the light object, these are skipped here
+            if light_prim is None or not light_prim.IsValid():
                 continue
-            #assert light_prim.IsValid()
 
-            light_prim.GetAttribute("inputs:intensity").Set(intensity)
+            light_prim.GetAttribute("inputs:intensity").Set(float(intensity))
 
-            color = np.random.normal(loc=col_mean, scale=col_std, size=(3,))
-            color = np.clip(color, 0, 255).astype(float) / 255.0
+            color = np.random.normal(col_mean, col_std, size=(3,))
+            color = np.clip(color, 0, 255) / 255.0
             light_prim.GetAttribute("inputs:color").Set(lazy.pxr.Gf.Vec3f(*color))
 
-        # for light in all_lights:
-        #     light_prim = find_light_prim(light)
-        #     if not light_prim.IsValid(): # the recursive search also takes links that do not contain the light object, these are skipped here
-        #         continue
-        #     #assert light_prim and light_prim.IsValid()
-        #
-        #     # light_prim_path = light_prim.GetPath().pathString
-        #     # light_prim = lazy.omni.isaac.core.utils.prims.lazy_prims_utils.get_prim_at_path(light_prim_path)
-        #     # assert light_prim.IsValid()
-        #
-        #     light_prim.GetAttribute("inputs:intensity").Set(intensity)
-        #
-        #     color = np.random.normal(loc=col_mean, scale=col_std, size=(3,))
-        #     color = np.clip(color, 0, 255).astype(float) / 255.0
-        #     light_prim.GetAttribute("inputs:color").Set(lazy.pxr.Gf.Vec3f(*color))
 
-    def v_view(self):
-        def perturb_camera_pose(cam_pos: list[float], cam_orientation: list[float]) -> tuple[list[float], list[float]]:
-            MAX_POS_DEVIATION = 0.2
-            MAX_PITCH_DEVIATION = 0.2
-            MAX_YAW_DEVIATION = 0.2
-            cam_pos = np.array(cam_pos)
-            delta_pos = np.random.uniform(-MAX_POS_DEVIATION, MAX_POS_DEVIATION, 3)
-            cam_pos += delta_pos
-            cam_pos = cam_pos.tolist()
+    def v_view(self, degree: int = 1):
+        assert degree in [1, 2, 3]
+
+        if degree == 1:
+            MAX_POS = 0.2
+            MAX_PITCH = 0.2
+            MAX_YAW = 0.2
+        elif degree == 2:
+            MAX_POS = 0.28
+            MAX_PITCH = 0.28
+            MAX_YAW = 0.30
+        else:  # degree == 3
+            MAX_POS = 0.35
+            MAX_PITCH = 0.35
+            MAX_YAW = 0.40
+
+        def perturb_camera_pose(cam_pos, cam_orientation):
+            cam_pos = np.array(cam_pos, dtype=float)
+            cam_pos += np.random.uniform(-MAX_POS, MAX_POS, size=3)
 
             cam_orientation = torch.tensor(cam_orientation)
             cam_rpy = omnigibson_transform_utils.quat2euler(cam_orientation)
-            cam_rpy[0] += (torch.rand(()) * 2 - 1) * MAX_PITCH_DEVIATION
-            cam_rpy[2] += (torch.rand(()) * 2 - 1) * MAX_YAW_DEVIATION
+            cam_rpy[0] += (torch.rand(()) * 2 - 1) * MAX_PITCH
+            cam_rpy[2] += (torch.rand(()) * 2 - 1) * MAX_YAW
             cam_orientation = omnigibson_transform_utils.euler2quat(cam_rpy)
-            cam_orientation = cam_orientation.cpu().numpy().tolist()
 
-            return cam_pos, cam_orientation
+            return cam_pos.tolist(), cam_orientation.cpu().numpy().tolist()
 
-        # TODO: in some cases, the objects are not fully visible - add a look_at or similar to minimize these cases
         og.sim.stop()
         for i in range(len(self.omnigibson_env.external_sensors)):
             robot_pos = self.cfg["robots"][0]["position"]
             robot_rot = self.cfg["robots"][0]["orientation"]
-            robot_rot = omnigibson_transform_utils.quat2euler(torch.tensor(robot_rot, dtype=torch.float32)).tolist()
+            robot_rot = omnigibson_transform_utils.quat2euler(
+                torch.tensor(robot_rot, dtype=torch.float32)
+            ).tolist()
 
             cam_pose_keys = list(self.cfg_camera_extrinsics.keys())
-            filtered_cam_pose_keys = [
-                key for key in cam_pose_keys
-                if (
-                        not key.startswith('CP') and
-                        not (i == 0 and 'cam2' in key) and
-                        not (i == 1 and 'cam1' in key)
-                )
+            filtered = [
+                k for k in cam_pose_keys
+                if not k.startswith("CP")
+                and not (i == 0 and "cam2" in k)
+                and not (i == 1 and "cam1" in k)
             ]
+
             if self.task_type in ["open_drawer", "close_drawer"]:
-                cam_pose_name = "ep_001042_cam1" if i == 0 else "ep_001042_cam2" # TODO: scene specific, just get the extrinsic key dynamically
+                cam_pose_name = "ep_001042_cam1" if i == 0 else "ep_001042_cam2"
             else:
-                cam_pose_name = np.random.choice(filtered_cam_pose_keys)
-            cam_pos, cam_orientation = self.construct_ext_cam_pose_by_name(cam_pose_name, robot_pos, robot_rot)
-            new_cam_pos, new_cam_orientation = perturb_camera_pose(cam_pos, cam_orientation)
-            base_cam_config = self.cfg["env"]["external_sensors"][i]
-            pose_frame = base_cam_config["pose_frame"]
-            self.omnigibson_env.external_sensors[base_cam_config["name"]].set_position_orientation(new_cam_pos, new_cam_orientation, pose_frame)
+                cam_pose_name = np.random.choice(filtered)
+
+            cam_pos, cam_ori = self.construct_ext_cam_pose_by_name(
+                cam_pose_name, robot_pos, robot_rot
+            )
+            new_pos, new_ori = perturb_camera_pose(cam_pos, cam_ori)
+
+            base_cfg = self.cfg["env"]["external_sensors"][i]
+            self.omnigibson_env.external_sensors[base_cfg["name"]].set_position_orientation(
+                new_pos, new_ori, base_cfg["pose_frame"]
+            )
+
         og.sim.play()
-        obs, _ = self.omnigibson_env.reset()
+        self.omnigibson_env.reset()
         self.reset_joints()
+
 
     def vsb_nobj(self):
         included_categories = None
@@ -809,12 +821,76 @@ class RealmEnvironmentDynamic(RealmEnvironmentBase):
             self.omnigibson_env.scene.update_initial_state()
             self.reset_joints()
 
+    def _sample_local_non_colliding_position(self, original_position, bbox, placed_objects_info, max_offset_xy, min_separation=0.05, max_attempts=250):
+        original_position = np.array(original_position, dtype=float)
+        bbox = np.array(bbox, dtype=float)
+        max_offset_xy = np.array(max_offset_xy, dtype=float)
+        if np.allclose(max_offset_xy, 0.0):
+            return original_position
+
+        half_width = bbox[0] / 2
+        half_depth = bbox[1] / 2
+        x_low = max(self.spawn_bbox[0] + half_width, original_position[0] - max_offset_xy[0])
+        x_high = min(self.spawn_bbox[1] - half_width, original_position[0] + max_offset_xy[0])
+        y_low = max(self.spawn_bbox[2] + half_depth, original_position[1] - max_offset_xy[1])
+        y_high = min(self.spawn_bbox[3] - half_depth, original_position[1] + max_offset_xy[1])
+
+        if x_low > x_high or y_low > y_high:
+            return original_position
+
+        for _ in range(max_attempts):
+            sampled_position = original_position.copy()
+            sampled_position[0] = np.random.uniform(x_low, x_high)
+            sampled_position[1] = np.random.uniform(y_low, y_high)
+
+            collision = False
+            for px, py, phw, phd in placed_objects_info:
+                dist_x = abs(sampled_position[0] - px)
+                dist_y = abs(sampled_position[1] - py)
+                if dist_x < (half_width + phw + min_separation) and \
+                        dist_y < (half_depth + phd + min_separation):
+                    collision = True
+                    break
+
+            if not collision:
+                return sampled_position
+
+        return original_position
+
+    def _apply_v_sc_target_position_jitter(self, obj_cfgs):
+        if len(self.target_objects) == 0 or np.allclose(self.v_sc_target_jitter_range_xy, 0.0):
+            return
+
+        target_names = {obj.name for obj in self.target_objects}
+        main_object_names = {obj.name for obj in self.main_objects}
+        placed_objects_info = []
+
+        for cfg in obj_cfgs:
+            if cfg["name"] not in main_object_names:
+                continue
+            bbox = np.array(cfg.get("bounding_box", [0.08, 0.08, 0.08]), dtype=float)
+            placed_objects_info.append((cfg["position"][0], cfg["position"][1], bbox[0] / 2, bbox[1] / 2))
+
+        for cfg in obj_cfgs:
+            if cfg["name"] not in target_names:
+                continue
+            bbox = np.array(cfg.get("bounding_box", [0.08, 0.08, 0.08]), dtype=float)
+            new_position = self._sample_local_non_colliding_position(
+                original_position=cfg["position"],
+                bbox=bbox,
+                placed_objects_info=placed_objects_info,
+                max_offset_xy=self.v_sc_target_jitter_range_xy,
+            )
+            cfg["position"] = new_position.tolist()
+            placed_objects_info.append((new_position[0], new_position[1], bbox[0] / 2, bbox[1] / 2))
+
     def v_sc(self):
         # --------------- Translation ---------------
         og.sim.stop()
 
         obj_cfgs = copy.deepcopy(self.cfg["objects"])
         num_mo_to = len(self.target_objects + self.main_objects)
+        self._apply_v_sc_target_position_jitter(obj_cfgs[:num_mo_to])
 
         self.cfg["objects"] = None
         num_distractors = len(obj_cfgs) - num_mo_to
@@ -843,6 +919,11 @@ class RealmEnvironmentDynamic(RealmEnvironmentBase):
         # --------------- Set Position ---------------
         for obj in self.cfg["objects"]:
             self.omnigibson_env.scene.object_registry("name", obj["name"]).set_position(obj["position"])
+
+        for scene_obj in self.main_objects + self.target_objects + self.distractors:
+            pos, rot = scene_obj.get_position_orientation()
+            self.init_poses[scene_obj._relative_prim_path]["pos"] = pos
+            self.init_poses[scene_obj._relative_prim_path]["rot"] = rot
 
         # TODO: support this again? rn we just use default rot for the objects
         # # --------------- Set Rotation ---------------
@@ -906,8 +987,8 @@ class RealmEnvironmentDynamic(RealmEnvironmentBase):
         for p in self.active_perturbations:
             self.supported_pertrubations[p]()
         if "V-AUG" in self.active_perturbations:
-            self.v_aug_sigma = np.random.uniform(0.0, 2.5)
-            self.v_aug_alpha = np.random.uniform(0.25, 1.5)
+            self.v_aug_sigma = np.random.uniform(0.0, 3.5)
+            self.v_aug_alpha = np.random.uniform(0.25, 2.0)
             obs = apply_blur_and_contrast(obs, self.v_aug_sigma, self.v_aug_alpha)
         return obs, _
 

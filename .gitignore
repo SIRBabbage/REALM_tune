@@ -1,0 +1,14 @@
+Isaac-GR00T/
+data/
+examples/03_gr00t_n1_6_droid_eval.py
+lerobot_data/
+logs/
+oculus_reader/
+openVLA/
+realm/__pycache__/
+realm/environments/__pycache__/
+realm/eval_old.py
+realm/robots/__pycache__/
+realm/teleop.py
+runall.sh
+teleopdata/
